@@ -1,0 +1,132 @@
+import requests
+import pandas as pd
+import json
+import os
+from datetime import datetime
+from io import BytesIO
+
+# Прямая ссылка на Excel-файл из ВК
+# Обновляйте эту ссылку, когда выкладывается новое расписание
+EXCEL_URL = "https://vk.com/doc6222960_693905429?hash=bMwQgzdgeTJ0fy4oQxS1zNNeivs02tEA7icW1uGCGjk&dl=d5hSJAh0xWKFAsICcHCpOif0HhZ75OngHONGZTAkAhX"
+
+def download_excel_from_vk():
+    """Скачивает Excel-файл по ссылке"""
+    print("📥 Скачиваем файл...")
+    
+    # Добавляем User-Agent, чтобы ВК не блокировал
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    
+    response = requests.get(EXCEL_URL, headers=headers, allow_redirects=True)
+    
+    if response.status_code != 200:
+        raise Exception(f"Не удалось скачать файл. Код: {response.status_code}")
+    
+    print(f"✅ Скачано {len(response.content)} байт")
+    return BytesIO(response.content)
+
+def parse_excel_to_json(file_obj):
+    """Парсит Excel и конвертирует в JSON"""
+    print("📊 Парсим Excel...")
+    
+    try:
+        xl_file = pd.ExcelFile(file_obj)
+    except Exception as e:
+        raise Exception(f"Ошибка чтения Excel: {e}")
+    
+    result = []
+    
+    for sheet_name in xl_file.sheet_names:
+        try:
+            df = pd.read_excel(xl_file, sheet_name=sheet_name)
+        except:
+            continue
+        
+        if df.empty:
+            continue
+        
+        group_data = {
+            "group": sheet_name.strip(),
+            "schedule": []
+        }
+        
+        current_day = None
+        lessons = []
+        
+        for idx, row in df.iterrows():
+            if pd.isna(row.iloc[0]) and (len(row) < 2 or pd.isna(row.iloc[1])):
+                continue
+            
+            first_cell = str(row.iloc[0]).strip() if not pd.isna(row.iloc[0]) else ""
+            
+            days = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+            is_day = any(day.lower() in first_cell.lower() for day in days)
+            
+            if is_day:
+                if current_day and lessons:
+                    group_data["schedule"].append({
+                        "day": current_day,
+                        "lessons": lessons
+                    })
+                
+                current_day = first_cell
+                lessons = []
+            elif current_day and len(row) >= 2:
+                time_val = str(row.iloc[0]).strip() if not pd.isna(row.iloc[0]) else ""
+                subject = str(row.iloc[1]).strip() if len(row) > 1 and not pd.isna(row.iloc[1]) else ""
+                
+                if not subject or subject.lower() in ['nan', '']:
+                    continue
+                
+                room = str(row.iloc[2]).strip() if len(row) > 2 and not pd.isna(row.iloc[2]) else ""
+                lesson_type = str(row.iloc[3]).strip() if len(row) > 3 and not pd.isna(row.iloc[3]) else ""
+                
+                if lesson_type.lower() in ['nan', '']:
+                    lesson_type = ""
+                
+                lessons.append({
+                    "time": time_val,
+                    "subject": subject,
+                    "room": room,
+                    "type": lesson_type
+                })
+        
+        if current_day and lessons:
+            group_data["schedule"].append({
+                "day": current_day,
+                "lessons": lessons
+            })
+        
+        if group_data["schedule"]:
+            result.append(group_data)
+            print(f"  ✓ Группа {sheet_name}: {len(group_data['schedule'])} дней")
+    
+    return result
+
+def main():
+    print("=" * 50)
+    print("📅 VK Schedule Parser")
+    print("=" * 50)
+    
+    try:
+        excel_file = download_excel_from_vk()
+        json_data = parse_excel_to_json(excel_file)
+        
+        if not json_data:
+            raise Exception("Не удалось распарсить ни одной группы")
+        
+        print(f"\n✅ Всего групп: {len(json_data)}")
+        
+        with open("schedule.json", "w", encoding="utf-8") as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=2)
+        print("💾 schedule.json создан!")
+        
+        print("\n✨ Готово!")
+        
+    except Exception as e:
+        print(f"\n❌ Ошибка: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
